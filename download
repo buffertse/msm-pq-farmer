@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+config.json
+platform-tools/
+*.png
+*.bmp
+*.log
