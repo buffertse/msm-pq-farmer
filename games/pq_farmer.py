@@ -260,11 +260,16 @@ class PQFarmer:
 
     # ── recovery ───────────────────────────────────────────────────────
 
-    def _soft_recovery(self):
-        """Tap center to dismiss popups, then check state."""
-        log.warning("Soft recovery — tapping center to dismiss popups")
-        self._tap(960, 540, "[recovery]")
-        time.sleep(2)
+    def _dismiss_popup(self):
+        """Dismiss popups by pressing Back + tapping common OK positions."""
+        log.info("Dismissing popup...")
+        # Android Back button — closes most dialogs
+        self._shell("input keyevent 4")
+        time.sleep(1)
+        # Also tap where OK buttons typically appear (center-bottom of popup)
+        for y in (560, 600, 650):
+            self._tap(960, y, "[dismiss]")
+            time.sleep(0.5)
 
     # ── wait loops (exact copy from original) ──────────────────────────
 
@@ -307,12 +312,9 @@ class PQFarmer:
                 log.info("Back at menu (match failed)")
                 return False
 
-            # Recovery: if stuck in "waiting" for 60s, tap center to
-            # dismiss popups (Lost connection, event notices, etc.)
-            if time.time() - last_recovery > 60:
-                log.info("Stuck — tapping OK to dismiss popup")
-                self._tap(960, 560, "[OK dismiss]")
-                time.sleep(2)
+            # Recovery: if stuck in "waiting" for 30s, dismiss popups
+            if time.time() - last_recovery > 30:
+                self._dismiss_popup()
                 last_recovery = time.time()
 
             e = int(time.time() - t0)
@@ -322,9 +324,7 @@ class PQFarmer:
 
         log.warning("Queue timeout (%ds)", timeout)
         self.stats.queue_timeouts += 1
-        # Tap center to dismiss any popup before retrying
-        self._tap(960, 560, "[OK dismiss]")
-        time.sleep(2)
+        self._dismiss_popup()
         return False
 
     def _wait_pq(self):
@@ -351,9 +351,7 @@ class PQFarmer:
             time.sleep(random.uniform(4, 7))
 
         log.info("PQ timeout — continuing")
-        # Dismiss any popup
-        self._tap(960, 560, "[OK dismiss]")
-        time.sleep(2)
+        self._dismiss_popup()
 
     # ── main loop (exact same flow as original) ────────────────────────
 
@@ -476,7 +474,7 @@ class PQFarmer:
                     stuck_count += 1
                     log.info("In queue or PQ")
                     if stuck_count > 3:
-                        self._soft_recovery()
+                        self._dismiss_popup()
                         stuck_count = 0
                     if self._wait_accept():
                         self._wait_pq()
@@ -492,7 +490,7 @@ class PQFarmer:
                 else:
                     stuck_count += 1
                     if stuck_count > 3:
-                        self._soft_recovery()
+                        self._dismiss_popup()
                         stuck_count = 0
                     time.sleep(5)
 
