@@ -138,10 +138,14 @@ class PQFarmer:
     # ── capture + colour detection (exact copy from original) ──────────
 
     def _cap(self):
+        """Capture window — retries find_window every time (like original)."""
+        if self.capture.hwnd is None:
+            self.capture.find_window()
         try:
             return self.capture.capture_pil(use_cache=False)
         except Exception as e:
             log.debug("Capture error: %s", e)
+            self.capture.hwnd = None
             return None
 
     def _sample(self, img, rx, ry):
@@ -378,11 +382,11 @@ class PQFarmer:
     def _run(self):
         log.info("MSM PQ Farmer started")
 
-        # Find window
-        if not self.capture.find_window():
-            log.warning("BlueStacks window not found")
-            self.stop()
-            return
+        # Find window (non-fatal — retries on each capture)
+        if self.capture.find_window():
+            log.info("BlueStacks window found")
+        else:
+            log.warning("BlueStacks window not found — will retry")
 
         if not self.adb.connected:
             if not self.adb.auto_connect():
