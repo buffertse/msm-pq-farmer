@@ -1,0 +1,41 @@
+"""Color theme and style constants for the GUI."""
+
+COLORS = {
+    "bg": "#0d1117",
+    "bg2": "#161b22",
+    "bg3": "#21262d",
+    "border": "#30363d",
+    "accent": "#58a6ff",
+    "accent_hover": "#79c0ff",
+    "green": "#3fb950",
+    "green_dim": "#238636",
+    "yellow": "#d29922",
+    "red": "#f85149",
+    "orange": "#f0883e",
+    "purple": "#bc8cff",
+    "text": "#c9d1d9",
+    "text_bright": "#f0f6fc",
+    "text_dim": "#8b949e",
+    "sidebar": "#010409",
+    "sidebar_active": "#1f6feb",
+    "card": "#161b22",
+    "input_bg": "#0d1117",
+    "btn": "#21262d",
+    "btn_hover": "#30363d",
+    "success_bg": "#0d2818",
+    "error_bg": "#2d0c0e",
+    "warn_bg": "#2d2004",
+}
+
+FONTS = {
+    "title": ("Segoe UI", 20, "bold"),
+    "heading": ("Segoe UI", 14, "bold"),
+    "body": ("Segoe UI", 12),
+    "small": ("Segoe UI", 10),
+    "mono": ("Consolas", 11),
+    "mono_small": ("Consolas", 10),
+    "big_number": ("Segoe UI", 28, "bold"),
+    "button": ("Segoe UI", 12, "bold"),
+    "sidebar": ("Segoe UI", 11),
+    "sidebar_active": ("Segoe UI", 11, "bold"),
+}

@@ -1,0 +1,29 @@
+# MSM PQ Farmer — Inställningar
+# Kopiera den här filen till settings.yaml i projektets rot
+# och ändra det du vill. Allt som inte anges används standardvärden.
+
+adb:
+  serial: "127.0.0.1:5555"    # BlueStacks ADB-adress
+  path: null                   # Sökväg till adb.exe (null = auto-detect)
+
+quest:
+  type: sleepywood             # sleepywood | ludibrium | orbis | zakum
+  max_runs: 0                  # 0 = oändligt
+
+detection:
+  method: auto                 # auto | template | pixel
+  confidence: 0.85             # Template matching tröskel (0.0-1.0)
+
+timings:
+  pq_duration: 350             # Max sekunder i PQ
+  matchmaking_timeout: 180     # Max sekunder i kö
+  pre_queue_delay: [0, 20]     # Slumpmässig fördröjning innan kö [min, max]
+  post_reward_delay: [6, 12]   # Fördröjning efter belöning [min, max]
+
+input:
+  tap_spread: 10               # Slumpmässig pixel-offset per tryck
+
+recovery:
+  enabled: true
+  soft_timeout: 120            # Sekunder innan mjuk återhämtning
+  hard_timeout: 300            # Sekunder innan hård omstart
