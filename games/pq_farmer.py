@@ -301,6 +301,7 @@ class PQFarmer:
                 state = self._detect_state()
                 self.game_state = state
                 self._emit_state()
+                self._emit_stats()
 
                 # Log state transitions
                 if state != prev_state:
