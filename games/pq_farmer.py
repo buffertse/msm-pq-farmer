@@ -261,15 +261,14 @@ class PQFarmer:
     # ── recovery ───────────────────────────────────────────────────────
 
     def _dismiss_popup(self):
-        """Dismiss popups by pressing Back + tapping common OK positions."""
+        """Dismiss popups and cancel broken queues."""
         log.info("Dismissing popup...")
-        # Android Back button — closes most dialogs
-        self._shell("input keyevent 4")
-        time.sleep(1)
-        # Also tap where OK buttons typically appear (center-bottom of popup)
-        for y in (560, 600, 650):
-            self._tap(960, y, "[dismiss]")
-            time.sleep(0.5)
+        # Tap OK button on popup (e.g. "Lost connection to the party")
+        self._tap(960, 700, "[OK]")
+        time.sleep(1.5)
+        # Cancel broken matchmaking queue (X button)
+        self._tap(1200, 120, "[cancel queue]")
+        time.sleep(1.5)
 
     # ── wait loops (exact copy from original) ──────────────────────────
 
