@@ -120,39 +120,60 @@ class PQFarmer:
 
     # ── state detection (pixel colour, same as original) ───────────────
 
+    @staticmethod
+    def _color_match(pixel, target, tol):
+        return all(abs(int(a) - int(b)) <= tol for a, b in zip(pixel[:3], target))
+
     def _detect_state(self) -> GameState:
-        """Sample pixels to determine game state, exactly like original."""
+        """Sample pixels to determine game state."""
         img = self.capture.capture_pil(use_cache=False)
         if img is None:
             return GameState.UNKNOWN
 
         w, h = img.size
 
+        # Auto Match button — single pixel check (yellow-green, bottom-right)
         am_rx, am_ry = self._d("auto_match_check", [0.88, 0.86])
         am_color = self._d("auto_match_color", [187, 221, 34])
         am_tol = self._d("auto_match_tolerance", 45)
-
-        ac_rx, ac_ry = self._d("accept_check", [0.46, 0.70])
-        ac_color = self._d("accept_color", [32, 187, 205])
-        ac_tol = self._d("accept_tolerance", 40)
 
         am_px = img.getpixel((
             max(0, min(int(am_rx * w), w - 1)),
             max(0, min(int(am_ry * h), h - 1)),
         ))[:3]
-        ac_px = img.getpixel((
-            max(0, min(int(ac_rx * w), w - 1)),
-            max(0, min(int(ac_ry * h), h - 1)),
-        ))[:3]
+        am_match = self._color_match(am_px, am_color, am_tol)
 
-        am_match = all(abs(a - b) <= am_tol for a, b in zip(am_px, am_color))
-        ac_match = all(abs(a - b) <= ac_tol for a, b in zip(ac_px, ac_color))
+        # Accept button — scan a region for cyan colour (like original calibration)
+        # The accept popup can appear at varying vertical positions,
+        # so we scan rx=0.42-0.58, ry=0.55-0.82 for the cyan button
+        ac_match = self._scan_accept(img, w, h)
 
         if ac_match and not am_match:
             return GameState.ACCEPT
         if am_match:
             return GameState.MENU
         return GameState.WAITING
+
+    def _scan_accept(self, img, w, h) -> bool:
+        """Scan a region for the Accept button's cyan colour."""
+        ac_tol = self._d("accept_tolerance", 40)
+
+        # Cyan signature: low red, high green, high blue
+        for rx in (0.44, 0.46, 0.48, 0.50, 0.52):
+            for ry_pct in range(55, 82, 3):
+                ry = ry_pct / 100.0
+                px = img.getpixel((
+                    max(0, min(int(rx * w), w - 1)),
+                    max(0, min(int(ry * h), h - 1)),
+                ))[:3]
+                # Accept button is cyan: R<80, G>160, B>160
+                if px[0] < 80 and px[1] > 160 and px[2] > 160:
+                    return True
+                # Also check against configured colour with tolerance
+                ac_color = self._d("accept_color", [32, 187, 205])
+                if self._color_match(px, ac_color, ac_tol):
+                    return True
+        return False
 
     # ── ADB taps ───────────────────────────────────────────────────────
 
