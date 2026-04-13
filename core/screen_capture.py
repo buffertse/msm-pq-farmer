@@ -36,11 +36,14 @@ class ScreenCapture:
                     r = win32gui.GetWindowRect(hwnd)
                     w, h = r[2] - r[0], r[3] - r[1]
                     if w > 200 and h > 200:
-                        results.append(hwnd)
+                        results.append((hwnd, w, h, win32gui.GetWindowText(hwnd)))
 
             win32gui.EnumWindows(cb, None)
             if results:
-                self.hwnd = results[0]
+                # Pick the largest window (main game, not a helper dialog)
+                results.sort(key=lambda x: x[1] * x[2], reverse=True)
+                self.hwnd = results[0][0]
+                log.debug("Window: %s (%dx%d)", results[0][3], results[0][1], results[0][2])
                 return True
         except ImportError:
             log.debug("pywin32 not available — using ADB capture")
