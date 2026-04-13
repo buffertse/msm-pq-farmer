@@ -272,14 +272,15 @@ class PQFarmer:
         return px[0] < 80 and px[1] > 160 and px[2] > 160
 
     def _dismiss_popup(self):
-        """Dismiss popups and cancel broken queues."""
-        log.info("Dismissing popup...")
-        # Tap OK button on popup (e.g. "Lost connection to the party")
-        self._tap(960, 700, "[OK]")
-        time.sleep(1.5)
-        # Cancel broken matchmaking queue (X button)
-        self._tap(1200, 120, "[cancel queue]")
-        time.sleep(1.5)
+        """Dismiss popup. Only cancel queue if it was a Lost Connection."""
+        if self._has_popup():
+            log.info("Popup detected — dismissing OK + canceling broken queue")
+            self._tap(960, 700, "[OK]")
+            time.sleep(1.5)
+            self._tap(1200, 120, "[cancel queue]")
+            time.sleep(1.5)
+        else:
+            log.debug("No popup found")
 
     # ── wait loops (exact copy from original) ──────────────────────────
 
