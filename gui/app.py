@@ -12,11 +12,7 @@ from gui.widgets import SidebarButton, StatusBadge
 from gui.pages import DashboardPage, SettingsPage, LogPage
 from core.logger import LogCallback, setup_logger
 from core.adb_controller import ADBController
-from core.screen_capture import ScreenCapture
-from core.template_matcher import TemplateMatcher
-from core.input_handler import InputHandler
 from config import ConfigManager
-from games.pq_farmer import PQFarmer, QuestType
 
 log = logging.getLogger("msm-pq-farmer")
 
@@ -47,10 +43,10 @@ class BotApp:
             adb_path=self.config.get("adb.path"),
             serial=self.config.get("adb.serial", "127.0.0.1:5555"),
         )
-        self.capture = ScreenCapture(self.adb)
-        self.matcher = TemplateMatcher()
-        self.input_handler = InputHandler(self.adb, spread=self.config.get("input.tap_spread", 10))
-        self.bot: PQFarmer = None
+        self.capture = None
+        self.matcher = None
+        self.input_handler = None
+        self.bot = None
         self._bot_thread: threading.Thread = None
 
         self._build_ui()
@@ -184,6 +180,17 @@ class BotApp:
         self._status_text.config(text="Setting up...")
         threading.Thread(target=self._auto_setup_worker, daemon=True).start()
 
+    def _init_core(self):
+        """Lazy-init heavy modules (cv2/numpy load here, not at startup)."""
+        if self.capture is not None:
+            return
+        from core.screen_capture import ScreenCapture
+        from core.template_matcher import TemplateMatcher
+        from core.input_handler import InputHandler
+        self.capture = ScreenCapture(self.adb)
+        self.matcher = TemplateMatcher()
+        self.input_handler = InputHandler(self.adb, spread=self.config.get("input.tap_spread", 10))
+
     def _auto_setup_worker(self):
         if not self.adb.available:
             self.root.after(0, self._status_text.config,
@@ -192,8 +199,6 @@ class BotApp:
             if path:
                 self.adb = ADBController(adb_path=path,
                                          serial=self.config.get("adb.serial", "127.0.0.1:5555"))
-                self.capture = ScreenCapture(self.adb)
-                self.input_handler = InputHandler(self.adb)
             else:
                 self.root.after(0, self._status_text.config,
                                 {"text": "ADB not found — install manually"})
@@ -210,8 +215,9 @@ class BotApp:
     def _on_connected(self):
         self.conn_badge.set("connected")
         self._conn_label.config(text=self.adb.serial)
-        self._status_text.config(text="Connected — click Start to begin farming")
-        self.capture.find_window()
+        self._status_text.config(text="Connected — starting...")
+        # Auto-start: just click the bat and it runs
+        self.root.after(500, self._on_start)
 
     # ── bot control ────────────────────────────────────────────────────
 
@@ -224,8 +230,12 @@ class BotApp:
             if not self.adb.auto_connect():
                 self._status_text.config(text="Could not connect — start BlueStacks first")
                 return
-            self._on_connected()
 
+        # Lazy-init heavy modules (cv2/numpy load here)
+        self._init_core()
+        self.capture.find_window()
+
+        from games.pq_farmer import PQFarmer, QuestType
         quest_str = self.config.get("quest.type", "sleepywood")
         try:
             quest = QuestType(quest_str)

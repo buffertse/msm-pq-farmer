@@ -4,12 +4,8 @@ Screen capture with Win32 background capture, ADB fallback, and caching.
 
 import time
 import logging
-import ctypes
 from io import BytesIO
 from typing import Optional, Tuple
-
-import numpy as np
-from PIL import Image
 
 log = logging.getLogger("msm-pq-farmer")
 
@@ -52,8 +48,9 @@ class ScreenCapture:
 
     # ── capture ────────────────────────────────────────────────────────
 
-    def capture(self, use_cache: bool = True) -> Optional[np.ndarray]:
+    def capture(self, use_cache: bool = True):
         """Return a BGR numpy array of the current screen."""
+        import numpy as np
         now = time.time()
         if use_cache and self._cache_img is not None and (now - self._cache_time) < CACHE_TTL:
             return self._cache_img
@@ -70,7 +67,7 @@ class ScreenCapture:
         self._cache_time = now
         return bgr
 
-    def capture_pil(self, use_cache: bool = True) -> Optional[Image.Image]:
+    def capture_pil(self, use_cache: bool = True):
         """Return a PIL RGB image (for legacy pixel sampling)."""
         now = time.time()
         if use_cache and self._cache_pil is not None and (now - self._cache_time) < CACHE_TTL:
@@ -83,7 +80,7 @@ class ScreenCapture:
             self._cache_time = now
         return img
 
-    def capture_region(self, x: int, y: int, w: int, h: int) -> Optional[np.ndarray]:
+    def capture_region(self, x: int, y: int, w: int, h: int):
         """Capture a sub-region of the screen (BGR)."""
         full = self.capture()
         if full is None:
@@ -130,13 +127,13 @@ class ScreenCapture:
             return None
         return img.size
 
-    def to_grayscale(self, bgr: np.ndarray) -> np.ndarray:
+    def to_grayscale(self, bgr):
         import cv2
         return cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
     # ── Win32 PrintWindow (background capture) ─────────────────────────
 
-    def _capture_win32(self) -> Optional[Image.Image]:
+    def _capture_win32(self):
         if self.hwnd is None and not self.find_window():
             return None
         try:
@@ -166,6 +163,7 @@ class ScreenCapture:
             if not ok:
                 windll.user32.PrintWindow(hwnd, sdc.GetSafeHdc(), 0)
 
+            from PIL import Image
             info = bmp.GetInfo()
             img = Image.frombuffer(
                 "RGB", (info["bmWidth"], info["bmHeight"]),
@@ -190,13 +188,14 @@ class ScreenCapture:
 
     # ── ADB fallback capture ───────────────────────────────────────────
 
-    def _capture_adb(self) -> Optional[Image.Image]:
+    def _capture_adb(self):
         if self.adb is None:
             return None
         raw = self.adb.screencap()
         if raw is None:
             return None
         try:
+            from PIL import Image
             return Image.open(BytesIO(raw)).convert("RGB")
         except Exception as e:
             log.debug("ADB capture decode error: %s", e)

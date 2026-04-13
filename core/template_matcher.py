@@ -9,10 +9,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
-import cv2
-import numpy as np
-
 log = logging.getLogger("msm-pq-farmer")
+
+# Lazy-loaded to avoid 15-20s startup delay
+cv2 = None
+np = None
+
+
+def _ensure_cv2():
+    global cv2, np
+    if cv2 is None:
+        import cv2 as _cv2
+        import numpy as _np
+        cv2 = _cv2
+        np = _np
 
 TEMPLATES_DIR = Path("templates")
 
@@ -46,13 +56,14 @@ class TemplateMatcher:
     def __init__(self, templates_dir: str = "templates", confidence: float = 0.85):
         self.templates_dir = Path(templates_dir)
         self.default_confidence = confidence
-        self._cache_color: Dict[str, np.ndarray] = {}
-        self._cache_gray: Dict[str, np.ndarray] = {}
+        self._cache_color: Dict[str, object] = {}
+        self._cache_gray: Dict[str, object] = {}
 
     # ── template loading ───────────────────────────────────────────────
 
-    def load_template(self, name: str) -> Optional[np.ndarray]:
+    def load_template(self, name: str):
         """Load a template image by name, returning BGR array. Cached."""
+        _ensure_cv2()
         if name in self._cache_color:
             return self._cache_color[name]
 
@@ -71,7 +82,7 @@ class TemplateMatcher:
         self._cache_gray[name] = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         return img
 
-    def load_template_gray(self, name: str) -> Optional[np.ndarray]:
+    def load_template_gray(self, name: str):
         if name not in self._cache_gray:
             self.load_template(name)
         return self._cache_gray.get(name)
@@ -91,7 +102,7 @@ class TemplateMatcher:
 
     def find(
         self,
-        screen: np.ndarray,
+        screen,
         template_name: str,
         confidence: Optional[float] = None,
         grayscale: bool = True,
@@ -128,7 +139,7 @@ class TemplateMatcher:
 
     def find_all(
         self,
-        screen: np.ndarray,
+        screen,
         template_name: str,
         confidence: Optional[float] = None,
         min_distance: int = 20,
@@ -169,7 +180,7 @@ class TemplateMatcher:
 
     def find_any(
         self,
-        screen: np.ndarray,
+        screen,
         template_names: List[str],
         confidence: Optional[float] = None,
     ) -> Optional[MatchResult]:
@@ -182,7 +193,7 @@ class TemplateMatcher:
 
     def find_best(
         self,
-        screen: np.ndarray,
+        screen,
         template_names: List[str],
         confidence: Optional[float] = None,
     ) -> Optional[MatchResult]:
