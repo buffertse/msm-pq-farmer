@@ -125,28 +125,14 @@ class PQFarmer:
         return all(abs(int(a) - int(b)) <= tol for a, b in zip(pixel[:3], target))
 
     def _detect_state(self) -> GameState:
-        """Sample pixels to determine game state."""
+        """Scan for button colours to determine game state."""
         img = self.capture.capture_pil(use_cache=False)
         if img is None:
             return GameState.UNKNOWN
 
         w, h = img.size
-
-        # Auto Match button — single pixel check (yellow-green, bottom-right)
-        am_rx, am_ry = self._d("auto_match_check", [0.88, 0.86])
-        am_color = self._d("auto_match_color", [187, 221, 34])
-        am_tol = self._d("auto_match_tolerance", 45)
-
-        am_px = img.getpixel((
-            max(0, min(int(am_rx * w), w - 1)),
-            max(0, min(int(am_ry * h), h - 1)),
-        ))[:3]
-        am_match = self._color_match(am_px, am_color, am_tol)
-
-        # Accept button — scan a region for cyan colour (like original calibration)
-        # The accept popup can appear at varying vertical positions,
-        # so we scan rx=0.42-0.58, ry=0.55-0.82 for the cyan button
         ac_match = self._scan_accept(img, w, h)
+        am_match = self._scan_auto_match(img, w, h)
 
         if ac_match and not am_match:
             return GameState.ACCEPT
@@ -154,24 +140,37 @@ class PQFarmer:
             return GameState.MENU
         return GameState.WAITING
 
-    def _scan_accept(self, img, w, h) -> bool:
-        """Scan a region for the Accept button's cyan colour."""
-        ac_tol = self._d("accept_tolerance", 40)
-
-        # Cyan signature: low red, high green, high blue
-        for rx in (0.44, 0.46, 0.48, 0.50, 0.52):
-            for ry_pct in range(55, 82, 3):
+    def _scan_auto_match(self, img, w, h) -> bool:
+        """Scan bottom-right region for the Auto Match button (yellow-green)."""
+        # Auto Match is a large yellow-green button in the bottom-right.
+        # Scan rx=0.75-0.96, ry=0.80-0.94
+        for rx_pct in range(75, 97, 3):
+            for ry_pct in range(80, 95, 2):
+                rx = rx_pct / 100.0
                 ry = ry_pct / 100.0
                 px = img.getpixel((
                     max(0, min(int(rx * w), w - 1)),
                     max(0, min(int(ry * h), h - 1)),
                 ))[:3]
-                # Accept button is cyan: R<80, G>160, B>160
-                if px[0] < 80 and px[1] > 160 and px[2] > 160:
+                # Yellow-green signature: R>140, G>180, B<80
+                if px[0] > 140 and px[1] > 180 and px[2] < 80:
                     return True
-                # Also check against configured colour with tolerance
-                ac_color = self._d("accept_color", [32, 187, 205])
-                if self._color_match(px, ac_color, ac_tol):
+        return False
+
+    def _scan_accept(self, img, w, h) -> bool:
+        """Scan center region for the Accept button (cyan)."""
+        # Accept popup appears in the center of the screen.
+        # Scan rx=0.38-0.62, ry=0.50-0.85
+        for rx_pct in range(38, 63, 4):
+            for ry_pct in range(50, 86, 3):
+                rx = rx_pct / 100.0
+                ry = ry_pct / 100.0
+                px = img.getpixel((
+                    max(0, min(int(rx * w), w - 1)),
+                    max(0, min(int(ry * h), h - 1)),
+                ))[:3]
+                # Cyan signature: R<80, G>160, B>160
+                if px[0] < 80 and px[1] > 160 and px[2] > 160:
                     return True
         return False
 
