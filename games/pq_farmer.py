@@ -1,6 +1,7 @@
 """
-PQ Farmer bot — simple state machine that mirrors the original farmer.py logic.
-Works minimized via Win32 PrintWindow + ADB input.
+PQ Farmer — based directly on the original farmer.py PQFarmer class.
+Same pixel detection, same state machine, same wait loops.
+Added: auto-calibration, GUI callbacks, pause/resume, recovery.
 """
 
 import time
@@ -8,25 +9,30 @@ import random
 import math
 import logging
 import threading
-from enum import Enum
 from dataclasses import dataclass, field
 from typing import Optional, Callable
 
 log = logging.getLogger("msm-pq-farmer")
 
-
-class BotState(Enum):
-    IDLE = "idle"
-    RUNNING = "running"
-    PAUSED = "paused"
-    STOPPED = "stopped"
-
-
-class GameState(Enum):
-    MENU = "menu"
-    ACCEPT = "accept"
-    WAITING = "waiting"
-    UNKNOWN = "unknown"
+DEFAULTS = {
+    "auto_match_tap":         [1700, 950],
+    "accept_tap":             [960, 800],
+    "auto_match_check":       [0.88, 0.86],
+    "auto_match_color":       [187, 221, 34],
+    "auto_match_tolerance":   45,
+    "accept_check":           [0.46, 0.70],
+    "accept_color":           [32, 187, 205],
+    "accept_tolerance":       40,
+    "pq_duration":            350,
+    "matchmaking_timeout":    180,
+    "accept_poll_interval":   0.8,
+    "pre_queue_delay":        [0, 20],
+    "post_reward_delay":      [6, 12],
+    "tap_spread":             10,
+    "random_tap_interval":    [30, 60],
+    "random_tap_radius":      200,
+    "accept_reaction_delay":  [0.5, 3.0],
+}
 
 
 @dataclass
@@ -60,189 +66,284 @@ class BotStats:
 
 class PQFarmer:
     """
-    Simple PQ farmer that follows the exact same logic as the original farmer.py:
-      menu → tap Auto Match → wait for Accept → wait in PQ → repeat
+    Exact same logic as original farmer.py PQFarmer, with added:
+    - Auto-calibration on first capture
+    - GUI callbacks (on_state_change, on_stats_update)
+    - Pause / resume / stop
+    - Soft recovery (tap center to dismiss popups)
     """
 
-    def __init__(self, adb, capture, matcher, inp, config: dict):
+    def __init__(self, adb, capture, cfg: dict):
         self.adb = adb
         self.capture = capture
-        self.matcher = matcher
-        self.input = inp
-        self.cfg = config
-
-        self.state = BotState.IDLE
-        self.game_state = GameState.UNKNOWN
-        self.stats = BotStats()
+        self.cfg = self._merge_defaults(cfg)
         self.dry_run = False
 
-        self._stop_event = threading.Event()
-        self._pause_event = threading.Event()
+        self.stats = BotStats()
+        self._state_str = "idle"
+        self._game_state = "unknown"
+        self._stop = threading.Event()
+        self._pause = threading.Event()
+        self._rt = time.time()
+        self._rti = random.uniform(*self.cfg["random_tap_interval"])
+        self._calibrated = self.cfg.get("calibrated", False)
 
-        self._debug_logged = False
-        self.debug = False
-        self._last_img = None
-        self._auto_match_pos = None
-        self._accept_pos = None
-
-        # Idle tap timer
-        interval = self._t("random_tap_interval", [30, 60])
-        self._idle_timer = time.time()
-        self._idle_interval = random.uniform(*interval)
-
-        # Callbacks for GUI
+        # GUI callbacks
         self.on_state_change: Optional[Callable] = None
         self.on_stats_update: Optional[Callable] = None
 
-    # ── config helpers ─────────────────────────────────────────────────
+    @staticmethod
+    def _merge_defaults(cfg: dict) -> dict:
+        """Flatten nested config and merge with defaults."""
+        flat = dict(DEFAULTS)
+        # Support both flat (original) and nested (new) config
+        if "detection" in cfg:
+            for k, v in cfg["detection"].items():
+                flat[k] = v
+        if "input" in cfg:
+            for k, v in cfg["input"].items():
+                flat[k] = v
+        if "timings" in cfg:
+            for k, v in cfg["timings"].items():
+                flat[k] = v
+        # Flat keys override
+        for k in DEFAULTS:
+            if k in cfg:
+                flat[k] = cfg[k]
+        if "adb" in cfg and "serial" in cfg["adb"]:
+            flat["adb_serial"] = cfg["adb"]["serial"]
+        elif "adb_serial" in cfg:
+            flat["adb_serial"] = cfg["adb_serial"]
+        else:
+            flat["adb_serial"] = "127.0.0.1:5555"
+        # max_runs
+        if "quest" in cfg:
+            flat["max_runs"] = cfg["quest"].get("max_runs", 0)
+        elif "max_runs" not in flat:
+            flat["max_runs"] = 0
+        return flat
 
-    def _t(self, key, default):
-        """Get a timings config value."""
-        return self.cfg.get("timings", {}).get(key, default)
-
-    def _d(self, key, default):
-        """Get a detection config value."""
-        return self.cfg.get("detection", {}).get(key, default)
-
-    def _i(self, key, default):
-        """Get an input config value."""
-        return self.cfg.get("input", {}).get(key, default)
-
-    # ── callbacks ──────────────────────────────────────────────────────
-
-    def _emit_state(self):
+    def _emit(self):
         if self.on_state_change:
             try:
-                self.on_state_change(self.state.value, self.game_state.value)
+                self.on_state_change(self._state_str, self._game_state)
             except Exception:
                 pass
-
-    def _emit_stats(self):
         if self.on_stats_update:
             try:
                 self.on_stats_update(self.stats.to_dict())
             except Exception:
                 pass
 
-    # ── state detection ──────────────────────────────────────────────────
+    # ── capture + colour detection (exact copy from original) ──────────
 
-    def _detect_state(self) -> GameState:
-        """Detect game state by checking pixel colours."""
-        img = self.capture.capture_pil(use_cache=False)
-        if img is None:
-            return GameState.UNKNOWN
+    def _cap(self):
+        try:
+            return self.capture.capture_pil(use_cache=False)
+        except Exception as e:
+            log.debug("Capture error: %s", e)
+            return None
 
-        self._last_img = img
+    def _sample(self, img, rx, ry):
         w, h = img.size
+        return img.getpixel((
+            max(0, min(int(rx * w), w - 1)),
+            max(0, min(int(ry * h), h - 1)),
+        ))[:3]
 
-        if not self._debug_logged:
-            self._debug_logged = True
-            log.info("Capture size: %dx%d", w, h)
+    def _match(self, px, target, tol):
+        return all(abs(a - b) <= tol for a, b in zip(px[:3], target))
 
-        # Accept — check center of screen for cyan popup
-        pos = self._find_accept(img, w, h)
-        if pos:
-            self._accept_pos = pos
-            return GameState.ACCEPT
+    def _state(self):
+        img = self._cap()
+        if img is None:
+            return "unknown"
+        c = self.cfg
+        am = self._match(
+            self._sample(img, *c["auto_match_check"]),
+            c["auto_match_color"], c["auto_match_tolerance"],
+        )
+        ac = self._match(
+            self._sample(img, *c["accept_check"]),
+            c["accept_color"], c["accept_tolerance"],
+        )
+        if ac and not am:
+            return "accept"
+        if am:
+            return "menu"
+        return "waiting"
 
-        # Auto Match — check known position first, then small scan
-        pos = self._find_auto_match(img, w, h)
-        if pos:
-            self._auto_match_pos = pos
-            return GameState.MENU
+    # ── auto-calibration (from original setup_wizard) ──────────────────
 
-        return GameState.WAITING
+    def _calibrate(self, img):
+        """Scan the captured image to find button positions and colours."""
+        s = img.size
+        log.info("Calibrating on %dx%d capture...", s[0], s[1])
 
-    def _find_auto_match(self, img, w, h):
-        """Find Auto Match button. Returns (abs_x, abs_y) or None.
+        # Scan for Auto Match (yellow-green, bottom-right)
+        best_am = None
+        best_score = 0
+        for rx in [i / 100 for i in range(80, 96)]:
+            for ry in [i / 100 for i in range(80, 92)]:
+                px = img.getpixel((int(rx * s[0]), int(ry * s[1])))[:3]
+                if px[1] > 180 and px[0] > 140 and px[2] < 80:
+                    score = px[1] + px[0] - px[2]
+                    if score > best_score:
+                        best_score = score
+                        best_am = (rx, ry, px)
 
-        Check the original default position first (fast). If that misses,
-        do a focused scan in the bottom-right corner only.
-        """
-        # 1) Check original calibrated position
-        rx, ry = 0.88, 0.86
-        px = img.getpixel((int(rx * w), int(ry * h)))[:3]
-        if px[0] > 140 and px[1] > 180 and px[2] < 80:
-            return (int(rx * w), int(ry * h))
+        if best_am:
+            rx, ry, colour = best_am
+            self.cfg["auto_match_check"] = [round(rx, 3), round(ry, 3)]
+            self.cfg["auto_match_color"] = list(colour)
+            # Derive tap position from relative coords
+            self.cfg["auto_match_tap"] = [int(rx * s[0]), int(ry * s[1])]
+            log.info("Auto Match at (%.2f, %.2f) RGB(%d,%d,%d)",
+                     rx, ry, *colour)
+        else:
+            log.info("Auto Match not found — using defaults")
 
-        # 2) Focused scan: bottom-right only (rx 0.80-0.96, ry 0.80-0.92)
-        #    Same range as original calibration scan
-        for rx_pct in range(80, 97, 2):
-            for ry_pct in range(80, 93, 2):
-                x = int(rx_pct * w // 100)
-                y = int(ry_pct * h // 100)
-                px = img.getpixel((min(x, w-1), min(y, h-1)))[:3]
-                if px[0] > 140 and px[1] > 180 and px[2] < 80:
-                    return (x, y)
-        return None
+        # Scan for Accept (cyan, center column)
+        best_ac = None
+        best_ac_score = 0
+        for ry in [i / 100 for i in range(55, 80)]:
+            px = img.getpixel((int(0.46 * s[0]), int(ry * s[1])))[:3]
+            if px[1] > 160 and px[2] > 160 and px[0] < 80:
+                score = px[1] + px[2] - px[0]
+                if score > best_ac_score:
+                    best_ac_score = score
+                    best_ac = (0.46, ry, px)
 
-    def _find_accept(self, img, w, h):
-        """Find Accept button in center popup. Returns (abs_x, abs_y) or None.
+        if best_ac:
+            rx, ry, colour = best_ac
+            self.cfg["accept_check"] = [round(rx, 3), round(ry, 3)]
+            self.cfg["accept_color"] = list(colour)
+            self.cfg["accept_tap"] = [int(rx * s[0]), int(ry * s[1])]
+            log.info("Accept at (%.2f, %.2f) RGB(%d,%d,%d)",
+                     rx, ry, *colour)
+        else:
+            log.info("Accept not visible — will calibrate when it appears")
 
-        Only scans the center of the screen where the modal appears.
-        Avoids the bottom where 'Create Party' (also cyan) lives.
-        """
-        for rx_pct in range(42, 54, 2):
-            for ry_pct in range(58, 76, 2):
-                x = int(rx_pct * w // 100)
-                y = int(ry_pct * h // 100)
-                px = img.getpixel((min(x, w-1), min(y, h-1)))[:3]
-                if px[0] < 80 and px[1] > 160 and px[2] > 160:
-                    return (x, y)
-        return None
+        self._calibrated = True
 
-    # ── ADB taps ───────────────────────────────────────────────────────
+    # ── ADB commands ───────────────────────────────────────────────────
+
+    def _shell(self, cmd):
+        return self.adb.shell(cmd)
 
     def _tap(self, x, y, label=""):
-        spread = self._i("tap_spread", 10)
-        hx = x + random.randint(-spread, spread)
-        hy = y + random.randint(-spread, spread)
+        s = self.cfg["tap_spread"]
+        hx, hy = x + random.randint(-s, s), y + random.randint(-s, s)
         if self.dry_run:
             log.info("[dry] tap (%d,%d) %s", hx, hy, label)
             return
-        self.adb.shell(f"input tap {hx} {hy}")
+        self._shell(f"input tap {hx} {hy}")
         log.info("Tap (%d,%d) %s", hx, hy, label)
 
-    def _tap_auto_match(self):
-        if self._auto_match_pos:
-            self._tap(self._auto_match_pos[0], self._auto_match_pos[1], "[Auto Match]")
-        else:
-            pos = self._i("auto_match_tap", [1700, 950])
-            self._tap(pos[0], pos[1], "[Auto Match]")
-
-    def _tap_accept(self):
-        if self._accept_pos:
-            self._tap(self._accept_pos[0], self._accept_pos[1], "[Accept]")
-        else:
-            pos = self._i("accept_tap", [960, 800])
-            self._tap(pos[0], pos[1], "[Accept]")
-
     def _idle_tap(self):
-        """Random tap in safe center area."""
-        radius = self._t("random_tap_radius", 200)
-        angle = random.uniform(0, 2 * math.pi)
-        dist = random.uniform(0, radius)
-        x = int(960 + dist * math.cos(angle))
-        y = int(540 + dist * math.sin(angle))
+        r = self.cfg["random_tap_radius"]
+        a, d = random.uniform(0, 2 * math.pi), random.uniform(0, r)
+        x, y = int(960 + d * math.cos(a)), int(540 + d * math.sin(a))
         if not self.dry_run:
-            self.adb.shell(f"input tap {x} {y}")
+            self._shell(f"input tap {x} {y}")
         log.debug("Idle tap (%d,%d)", x, y)
 
     def _maybe_idle_tap(self):
-        if time.time() - self._idle_timer >= self._idle_interval:
+        if time.time() - self._rt >= self._rti:
             self._idle_tap()
-            self._idle_timer = time.time()
-            self._idle_interval = random.uniform(*self._t("random_tap_interval", [30, 60]))
+            self._rt = time.time()
+            self._rti = random.uniform(*self.cfg["random_tap_interval"])
 
-    # ── main loop (tick-based: scan every ~1s, act immediately) ──────────
+    # ── recovery ───────────────────────────────────────────────────────
+
+    def _soft_recovery(self):
+        """Tap center to dismiss popups, then check state."""
+        log.warning("Soft recovery — tapping center to dismiss popups")
+        self._tap(960, 540, "[recovery]")
+        time.sleep(2)
+
+    # ── wait loops (exact copy from original) ──────────────────────────
+
+    def _wait_accept(self):
+        log.info("Waiting for Accept...")
+        t0 = time.time()
+        timeout = self.cfg["matchmaking_timeout"]
+        poll = self.cfg["accept_poll_interval"]
+
+        while not self._stop.is_set() and time.time() - t0 < timeout:
+            if self._pause.is_set():
+                time.sleep(1)
+                continue
+
+            s = self._state()
+            self._game_state = s
+            self._emit()
+
+            if s == "accept":
+                # Try to calibrate accept position if not yet done
+                if not self._calibrated:
+                    img = self._cap()
+                    if img:
+                        self._calibrate(img)
+
+                lo, hi = self.cfg["accept_reaction_delay"]
+                d = random.uniform(lo, hi)
+                time.sleep(d)
+                log.info("Accept found (reaction %.1fs)", d)
+                self._tap(*self.cfg["accept_tap"], "[Accept]")
+                time.sleep(1.5)
+                if self._state() != "accept":
+                    return True
+                time.sleep(random.uniform(0.3, 1))
+                self._tap(*self.cfg["accept_tap"], "[Accept retry]")
+                return True
+
+            if s == "menu":
+                log.info("Back at menu (match failed)")
+                return False
+
+            e = int(time.time() - t0)
+            if e > 0 and e % 30 == 0:
+                log.info("  Queue: %ds / %ds", e, timeout)
+            time.sleep(poll + random.uniform(0, 0.5))
+
+        log.warning("Queue timeout (%ds)", timeout)
+        self.stats.queue_timeouts += 1
+        return False
+
+    def _wait_pq(self):
+        dur = self.cfg["pq_duration"]
+        log.info("In PQ (timeout %ds)", dur)
+        self._game_state = "in_pq"
+        self._emit()
+        t0 = time.time()
+
+        while not self._stop.is_set() and time.time() - t0 < dur:
+            if self._pause.is_set():
+                time.sleep(1)
+                continue
+
+            self._maybe_idle_tap()
+            s = self._state()
+            if s == "menu":
+                log.info("PQ done (%ds)", int(time.time() - t0))
+                return
+            if s == "accept":
+                time.sleep(random.uniform(0.5, 2))
+                self._tap(*self.cfg["accept_tap"], "[Accept]")
+            self._emit()
+            time.sleep(random.uniform(4, 7))
+
+        log.info("PQ timeout — continuing")
+
+    # ── main loop (exact same flow as original) ────────────────────────
 
     def start(self):
-        self.state = BotState.RUNNING
-        self._stop_event.clear()
-        self._pause_event.clear()
+        self._state_str = "running"
+        self._stop.clear()
+        self._pause.clear()
         self.stats = BotStats()
-        self._emit_state()
-        self._emit_stats()
+        self._emit()
         self._run()
 
     def start_threaded(self) -> threading.Thread:
@@ -251,32 +352,37 @@ class PQFarmer:
         return t
 
     def stop(self):
-        log.info("Stopping bot...")
-        self._stop_event.set()
-        self.state = BotState.STOPPED
-        self._emit_state()
+        log.info("Stopping...")
+        self._stop.set()
+        self._state_str = "stopped"
+        self._emit()
 
     def pause(self):
-        if self.state == BotState.RUNNING:
-            self._pause_event.set()
-            self.state = BotState.PAUSED
-            log.info("Bot paused")
-            self._emit_state()
+        self._pause.set()
+        self._state_str = "paused"
+        log.info("Paused")
+        self._emit()
 
     def resume(self):
-        if self.state == BotState.PAUSED:
-            self._pause_event.clear()
-            self.state = BotState.RUNNING
-            log.info("Bot resumed")
-            self._emit_state()
+        self._pause.clear()
+        self._state_str = "running"
+        log.info("Resumed")
+        self._emit()
+
+    @property
+    def state(self):
+        class _S:
+            def __init__(s2): s2.value = self._state_str
+        return _S()
 
     def _run(self):
         log.info("MSM PQ Farmer started")
 
-        if self.capture.find_window():
-            log.info("BlueStacks window found")
-        else:
-            log.warning("BlueStacks window not found — using ADB capture")
+        # Find window
+        if not self.capture.find_window():
+            log.warning("BlueStacks window not found")
+            self.stop()
+            return
 
         if not self.adb.connected:
             if not self.adb.auto_connect():
@@ -284,125 +390,97 @@ class PQFarmer:
                 self.stop()
                 return
 
-        max_runs = self.cfg.get("quest", {}).get("max_runs", 0)
-        prev_state = None
-        in_pq = False
-        pq_start = 0
-        queue_start = 0
-        queued = False
-        menu_count = 0
+        # First capture + auto-calibrate
+        img = self._cap()
+        if img:
+            log.info("Capture: %dx%d", img.size[0], img.size[1])
+            if not self._calibrated:
+                self._calibrate(img)
+        else:
+            log.warning("Cannot capture window")
+
+        state = self._state()
+        self._game_state = state
+        log.info("State: %s", state)
+        log.info("Running")
+        self._emit()
+
+        max_runs = self.cfg.get("max_runs", 0)
+        stuck_count = 0
 
         try:
-            while not self._stop_event.is_set():
-                if max_runs > 0 and self.stats.pq_runs >= max_runs:
-                    log.info("Completed %d runs — stopping", max_runs)
+            while not self._stop.is_set():
+                if 0 < max_runs <= self.stats.pq_runs:
+                    log.info("Finished %d runs", max_runs)
                     break
 
-                if self._pause_event.is_set():
+                if self._pause.is_set():
                     time.sleep(1)
                     continue
 
-                state = self._detect_state()
-                self.game_state = state
-                self._emit_state()
-                self._emit_stats()
+                self.stats.pq_runs  # trigger runtime update
+                self._emit()
 
-                # Log state transitions
-                if state != prev_state:
-                    log.info("State: %s", state.value)
-                    prev_state = state
+                state = self._state()
+                self._game_state = state
+                log.info("--- run %d --- [%s]", self.stats.pq_runs + 1, state)
 
-                # ── MENU: Auto Match button visible → tap it to queue ──
-                if state == GameState.MENU:
-                    if in_pq:
-                        # Confirm with consecutive detections to avoid
-                        # false positives from loading screen flicker
-                        menu_count += 1
-                        if menu_count < 3:
-                            time.sleep(random.uniform(0.8, 1.5))
-                            continue
-                        # Confirmed — PQ is actually done
-                        log.info("PQ done (%ds)", int(time.time() - pq_start))
-                        self.stats.pq_runs += 1
-                        self._emit_stats()
-                        in_pq = False
-                        queued = False
-                        menu_count = 0
-                        lo, hi = self._t("post_reward_delay", [6, 12])
+                if state == "menu":
+                    stuck_count = 0
+                    lo, hi = self.cfg["pre_queue_delay"]
+                    w = random.uniform(lo, hi)
+                    log.info("Queue in %.0fs", w)
+                    time.sleep(w)
+                    self._tap(*self.cfg["auto_match_tap"], "[Auto Match]")
+                    time.sleep(random.uniform(2, 4))
+                    if self._wait_accept():
+                        self._wait_pq()
+                        lo, hi = self.cfg["post_reward_delay"]
                         time.sleep(random.uniform(lo, hi))
-                        continue
-
-                    if not queued:
-                        # Pre-queue delay (human-like)
-                        lo, hi = self._t("pre_queue_delay", [0, 20])
-                        w = random.uniform(lo, hi)
-                        if w > 1:
-                            log.info("Queue in %.0fs", w)
-                        time.sleep(w)
-                        self._tap_auto_match()
-                        queued = True
-                        queue_start = time.time()
-                        time.sleep(random.uniform(1, 3))
+                        self.stats.pq_runs += 1
+                        self._emit()
                     else:
-                        # We tapped Auto Match but still see it →
-                        # maybe it didn't register, tap again
-                        log.info("Auto Match still visible — retapping")
-                        self._tap_auto_match()
+                        time.sleep(random.uniform(2, 5))
+
+                elif state == "accept":
+                    stuck_count = 0
+                    time.sleep(random.uniform(0.5, 2.5))
+                    self._tap(*self.cfg["accept_tap"], "[Accept]")
+                    time.sleep(2)
+                    self._wait_pq()
+                    lo, hi = self.cfg["post_reward_delay"]
+                    time.sleep(random.uniform(lo, hi))
+                    self.stats.pq_runs += 1
+                    self._emit()
+
+                elif state == "waiting":
+                    stuck_count += 1
+                    log.info("In queue or PQ")
+                    if stuck_count > 3:
+                        self._soft_recovery()
+                        stuck_count = 0
+                    if self._wait_accept():
+                        self._wait_pq()
+                        lo, hi = self.cfg["post_reward_delay"]
+                        time.sleep(random.uniform(lo, hi))
+                        self.stats.pq_runs += 1
+                        self._emit()
+                    else:
+                        lo, hi = self.cfg["pre_queue_delay"]
+                        time.sleep(random.uniform(lo, hi))
+                        self._tap(*self.cfg["auto_match_tap"], "[Auto Match]")
                         time.sleep(random.uniform(2, 4))
-
-                # ── ACCEPT: match found → tap Accept ───────────────────
-                elif state == GameState.ACCEPT:
-                    menu_count = 0
-                    lo, hi = self._t("accept_reaction_delay", [0.5, 3.0])
-                    d = random.uniform(lo, hi)
-                    time.sleep(d)
-                    log.info("Accept found (reaction %.1fs)", d)
-                    self._tap_accept()
-                    in_pq = True
-                    pq_start = time.time()
-                    queued = False
-                    # Wait for loading screen to pass before scanning again
-                    time.sleep(random.uniform(8, 12))
-
-                # ── WAITING: in queue, in PQ, or unknown screen ────────
-                elif state == GameState.WAITING:
-                    menu_count = 0
-                    if in_pq:
-                        # Inside PQ — idle taps to look active
-                        self._maybe_idle_tap()
-                        # Check for PQ timeout
-                        dur = self._t("pq_duration", 350)
-                        if time.time() - pq_start > dur:
-                            log.info("PQ timeout (%ds)", dur)
-                            in_pq = False
-                    elif queued:
-                        # In matchmaking queue — check for timeout
-                        timeout = self._t("matchmaking_timeout", 180)
-                        elapsed = int(time.time() - queue_start)
-                        if elapsed > 0 and elapsed % 30 == 0:
-                            log.info("  Queue: %ds / %ds", elapsed, timeout)
-                        if elapsed > timeout:
-                            log.warning("Queue timeout (%ds) — retapping Auto Match", timeout)
-                            self.stats.queue_timeouts += 1
-                            self._emit_stats()
-                            queued = False  # will re-tap next tick
-                    else:
-                        # Neither in PQ nor queued — could be end credits,
-                        # loading screen, popup etc. Just wait and rescan.
-                        pass
-
-                # ── UNKNOWN: capture failed ─────────────────────────────
                 else:
-                    pass
-
-                # Poll interval (~1s between scans)
-                time.sleep(random.uniform(0.8, 1.5))
+                    stuck_count += 1
+                    if stuck_count > 3:
+                        self._soft_recovery()
+                        stuck_count = 0
+                    time.sleep(5)
 
         except KeyboardInterrupt:
             pass
 
-        log.info("Bot stopped — %d PQ runs in %.0f minutes",
+        log.info("Stopped — %d PQ runs in %.0f minutes",
                  self.stats.pq_runs, self.stats.runtime / 60)
-        self.state = BotState.STOPPED
-        self._emit_state()
-        self._emit_stats()
+        self._state_str = "stopped"
+        self._emit()

@@ -29,10 +29,8 @@ def run_cli(args):
     from core.logger import setup_logger
     from core.adb_controller import ADBController
     from core.screen_capture import ScreenCapture
-    from core.template_matcher import TemplateMatcher
-    from core.input_handler import InputHandler
     from config import ConfigManager
-    from games.pq_farmer import PQFarmer, QuestType
+    from games.pq_farmer import PQFarmer
 
     logger = setup_logger(
         console_level=logging.DEBUG if args.debug else logging.INFO,
@@ -44,8 +42,6 @@ def run_cli(args):
         config.set("adb.serial", args.serial)
     if args.max_runs:
         config.set("quest.max_runs", args.max_runs)
-    if args.quest:
-        config.set("quest.type", args.quest)
 
     adb = ADBController(
         adb_path=args.adb,
@@ -67,19 +63,7 @@ def run_cli(args):
         sys.exit(1)
 
     capture = ScreenCapture(adb)
-    capture.find_window()
-    matcher = TemplateMatcher()
-    inp = InputHandler(adb, spread=config.get("input.tap_spread", 10))
-
-    try:
-        quest = QuestType(config.get("quest.type", "sleepywood"))
-    except ValueError:
-        quest = QuestType.SLEEPYWOOD
-
-    bot = PQFarmer(
-        adb=adb, capture=capture, matcher=matcher, inp=inp,
-        config=config.data, quest_type=quest,
-    )
+    bot = PQFarmer(adb=adb, capture=capture, cfg=config.data)
     bot.dry_run = args.dry_run
     bot.start()
 
@@ -97,8 +81,6 @@ def main():
                     help="stop after N runs (0 = unlimited)")
     ap.add_argument("--dry-run", action="store_true",
                     help="detect states but don't send taps")
-    ap.add_argument("--quest", choices=["sleepywood", "ludibrium", "orbis", "zakum"],
-                    help="quest type")
     ap.add_argument("--serial", help="ADB device address")
     ap.add_argument("--adb", help="path to adb.exe")
     ap.add_argument("--config", default=None, help="config file path")
