@@ -57,18 +57,18 @@ class StatusBadge(tk.Frame):
     }
 
     FRIENDLY_NAMES = {
-        "idle": "Redo",
-        "running": "Kör",
-        "paused": "Pausad",
-        "stopped": "Stoppad",
-        "menu": "Huvudmeny",
-        "accept": "Acceptera match",
-        "queued": "I kö",
-        "in_pq": "I Party Quest",
-        "loading": "Laddar...",
-        "unknown": "Söker...",
-        "connected": "Ansluten",
-        "disconnected": "Ej ansluten",
+        "idle": "Ready",
+        "running": "Running",
+        "paused": "Paused",
+        "stopped": "Stopped",
+        "menu": "Main Menu",
+        "accept": "Accept Match",
+        "queued": "In Queue",
+        "in_pq": "In Party Quest",
+        "loading": "Loading...",
+        "unknown": "Searching...",
+        "connected": "Connected",
+        "disconnected": "Not Connected",
     }
 
     def __init__(self, parent, status="idle"):

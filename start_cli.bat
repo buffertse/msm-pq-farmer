@@ -3,7 +3,10 @@ title MSM PQ Farmer (CLI)
 
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo  Python hittas inte. Installera fran https://python.org
+    echo.
+    echo  Python is not installed.
+    echo  Get it from https://python.org or the Microsoft Store.
+    echo.
     pause & exit /b 1
 )
 
