@@ -157,12 +157,13 @@ class PQFarmer:
                              rx, ry, px[0], px[1], px[2], label)
 
         ac_match = self._scan_accept(img, w, h)
-        am_match = self._scan_auto_match(img, w, h)
-
-        if ac_match and not am_match:
+        if ac_match:
             return GameState.ACCEPT
+
+        am_match = self._scan_auto_match(img, w, h)
         if am_match:
             return GameState.MENU
+
         return GameState.WAITING
 
     def _scan_auto_match(self, img, w, h) -> bool:
