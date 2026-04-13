@@ -181,16 +181,20 @@ class PQFarmer:
         return False
 
     def _scan_accept(self, img, w, h) -> bool:
-        """Scan center region for the Accept button (cyan)."""
-        for rx_pct in range(30, 71, 4):
-            for ry_pct in range(40, 91, 3):
+        """Scan CENTER of screen for the Accept popup (cyan).
+
+        The Accept popup is a modal dialog in the middle of the screen.
+        The 'Create Party' button is also cyan but sits at the very
+        bottom — so we only scan ry=0.55-0.75 to avoid it.
+        """
+        for rx_pct in range(40, 56, 3):
+            for ry_pct in range(55, 76, 3):
                 px = img.getpixel((
                     max(0, min(int(rx_pct * w // 100), w - 1)),
                     max(0, min(int(ry_pct * h // 100), h - 1)),
                 ))[:3]
-                # Cyan: R is low, G and B are high
-                # Relaxed: R<100, G>140, B>140
-                if px[0] < 100 and px[1] > 140 and px[2] > 140:
+                # Cyan: R<80, G>160, B>160 (tighter to avoid false positives)
+                if px[0] < 80 and px[1] > 160 and px[2] > 160:
                     return True
         return False
 

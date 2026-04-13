@@ -6,8 +6,15 @@ Entry point with GUI (default) and CLI modes.
 import sys
 import argparse
 import logging
+import ctypes
 
 VERSION = "2.0.0"
+
+# Critical for Win32 window APIs — without this, find_window fails
+try:
+    ctypes.windll.user32.SetProcessDPIAware()
+except Exception:
+    pass
 
 
 def run_gui():
