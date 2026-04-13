@@ -200,8 +200,8 @@ class PQFarmer:
             rx, ry, colour = best_am
             self.cfg["auto_match_check"] = [round(rx, 3), round(ry, 3)]
             self.cfg["auto_match_color"] = list(colour)
-            # Derive tap position from relative coords
-            self.cfg["auto_match_tap"] = [int(rx * s[0]), int(ry * s[1])]
+            # NOTE: don't change auto_match_tap — it uses ADB coords (game
+            # internal resolution), not window pixel coords
             log.info("Auto Match at (%.2f, %.2f) RGB(%d,%d,%d)",
                      rx, ry, *colour)
         else:
@@ -222,7 +222,7 @@ class PQFarmer:
             rx, ry, colour = best_ac
             self.cfg["accept_check"] = [round(rx, 3), round(ry, 3)]
             self.cfg["accept_color"] = list(colour)
-            self.cfg["accept_tap"] = [int(rx * s[0]), int(ry * s[1])]
+            # NOTE: don't change accept_tap — same reason as auto_match_tap
             log.info("Accept at (%.2f, %.2f) RGB(%d,%d,%d)",
                      rx, ry, *colour)
         else:
