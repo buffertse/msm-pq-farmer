@@ -81,6 +81,9 @@ class PQFarmer:
 
         self._debug_logged = False
         self.debug = False
+        self._last_img = None
+        self._auto_match_pos = None
+        self._accept_pos = None
 
         # Idle tap timer
         interval = self._t("random_tap_interval", [30, 60])
@@ -121,82 +124,72 @@ class PQFarmer:
             except Exception:
                 pass
 
-    # ── state detection (pixel colour, same as original) ───────────────
-
-    @staticmethod
-    def _color_match(pixel, target, tol):
-        return all(abs(int(a) - int(b)) <= tol for a, b in zip(pixel[:3], target))
+    # ── state detection ──────────────────────────────────────────────────
 
     def _detect_state(self) -> GameState:
-        """Scan for button colours to determine game state."""
+        """Detect game state by checking pixel colours."""
         img = self.capture.capture_pil(use_cache=False)
         if img is None:
             return GameState.UNKNOWN
 
+        self._last_img = img
         w, h = img.size
 
-        # Debug: log capture info and save screenshot on first scan
         if not self._debug_logged:
             self._debug_logged = True
             log.info("Capture size: %dx%d", w, h)
-            if self.debug:
-                try:
-                    img.save("debug_capture.png")
-                    log.info("Saved debug_capture.png")
-                except Exception:
-                    pass
-                for label, rx, ry in [
-                    ("auto_match_default", 0.88, 0.86),
-                    ("bottom-right1", 0.85, 0.90),
-                    ("bottom-right2", 0.90, 0.93),
-                    ("bottom-right3", 0.85, 0.95),
-                    ("center", 0.50, 0.70),
-                ]:
-                    px = img.getpixel((int(rx * w), int(ry * h)))[:3]
-                    log.info("  Pixel (%.2f, %.2f) = RGB(%d, %d, %d)  [%s]",
-                             rx, ry, px[0], px[1], px[2], label)
 
-        ac_match = self._scan_accept(img, w, h)
-        if ac_match:
+        # Accept — check center of screen for cyan popup
+        pos = self._find_accept(img, w, h)
+        if pos:
+            self._accept_pos = pos
             return GameState.ACCEPT
 
-        am_match = self._scan_auto_match(img, w, h)
-        if am_match:
+        # Auto Match — check known position first, then small scan
+        pos = self._find_auto_match(img, w, h)
+        if pos:
+            self._auto_match_pos = pos
             return GameState.MENU
 
         return GameState.WAITING
 
-    def _scan_auto_match(self, img, w, h) -> bool:
-        """Scan bottom-right quadrant for the Auto Match button (yellow-green)."""
-        for rx_pct in range(60, 99, 3):
-            for ry_pct in range(75, 100, 2):
-                px = img.getpixel((
-                    max(0, min(int(rx_pct * w // 100), w - 1)),
-                    max(0, min(int(ry_pct * h // 100), h - 1)),
-                ))[:3]
-                # Yellow-green: G is dominant, R is moderate, B is low
-                # Relaxed: R>120, G>160, B<120, and G must be highest
-                if px[1] > 160 and px[0] > 120 and px[2] < 120 and px[1] > px[0] and px[1] > px[2]:
-                    return True
-        return False
+    def _find_auto_match(self, img, w, h):
+        """Find Auto Match button. Returns (abs_x, abs_y) or None.
 
-    def _scan_accept(self, img, w, h) -> bool:
-        """Scan CENTER of screen for the Accept popup (cyan).
-
-        The Accept popup is a modal dialog in the middle of the screen.
-        The 'Create Party' button is also cyan but sits at the very
-        bottom — so we only scan ry=0.55-0.75 to avoid it.
+        Check the original default position first (fast). If that misses,
+        do a focused scan in the bottom-right corner only.
         """
-        for rx_pct in range(40, 56, 3):
-            for ry_pct in range(55, 76, 3):
-                px = img.getpixel((
-                    max(0, min(int(rx_pct * w // 100), w - 1)),
-                    max(0, min(int(ry_pct * h // 100), h - 1)),
-                ))[:3]
-                # Cyan: R<80, G>160, B>160 (tighter to avoid false positives)
+        # 1) Check original calibrated position
+        rx, ry = 0.88, 0.86
+        px = img.getpixel((int(rx * w), int(ry * h)))[:3]
+        if px[0] > 140 and px[1] > 180 and px[2] < 80:
+            return (int(rx * w), int(ry * h))
+
+        # 2) Focused scan: bottom-right only (rx 0.80-0.96, ry 0.80-0.92)
+        #    Same range as original calibration scan
+        for rx_pct in range(80, 97, 2):
+            for ry_pct in range(80, 93, 2):
+                x = int(rx_pct * w // 100)
+                y = int(ry_pct * h // 100)
+                px = img.getpixel((min(x, w-1), min(y, h-1)))[:3]
+                if px[0] > 140 and px[1] > 180 and px[2] < 80:
+                    return (x, y)
+        return None
+
+    def _find_accept(self, img, w, h):
+        """Find Accept button in center popup. Returns (abs_x, abs_y) or None.
+
+        Only scans the center of the screen where the modal appears.
+        Avoids the bottom where 'Create Party' (also cyan) lives.
+        """
+        for rx_pct in range(42, 54, 2):
+            for ry_pct in range(58, 76, 2):
+                x = int(rx_pct * w // 100)
+                y = int(ry_pct * h // 100)
+                px = img.getpixel((min(x, w-1), min(y, h-1)))[:3]
                 if px[0] < 80 and px[1] > 160 and px[2] > 160:
-                    return True
-        return False
+                    return (x, y)
+        return None
 
     # ── ADB taps ───────────────────────────────────────────────────────
 
@@ -211,12 +204,18 @@ class PQFarmer:
         log.info("Tap (%d,%d) %s", hx, hy, label)
 
     def _tap_auto_match(self):
-        pos = self._i("auto_match_tap", [1700, 950])
-        self._tap(pos[0], pos[1], "[Auto Match]")
+        if self._auto_match_pos:
+            self._tap(self._auto_match_pos[0], self._auto_match_pos[1], "[Auto Match]")
+        else:
+            pos = self._i("auto_match_tap", [1700, 950])
+            self._tap(pos[0], pos[1], "[Auto Match]")
 
     def _tap_accept(self):
-        pos = self._i("accept_tap", [960, 800])
-        self._tap(pos[0], pos[1], "[Accept]")
+        if self._accept_pos:
+            self._tap(self._accept_pos[0], self._accept_pos[1], "[Accept]")
+        else:
+            pos = self._i("accept_tap", [960, 800])
+            self._tap(pos[0], pos[1], "[Accept]")
 
     def _idle_tap(self):
         """Random tap in safe center area."""
