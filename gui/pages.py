@@ -50,13 +50,7 @@ class DashboardPage(tk.Frame):
         tk.Label(row1, text="Game:", font=FONTS["body"],
                  fg=COLORS["text_dim"], bg=COLORS["card"]).pack(side="left")
         self.game_badge = StatusBadge(row1, "unknown")
-        self.game_badge.pack(side="left", padx=(8, 24))
-
-        tk.Label(row1, text="Quest:", font=FONTS["body"],
-                 fg=COLORS["text_dim"], bg=COLORS["card"]).pack(side="left")
-        self.quest_label = tk.Label(row1, text="Sleepywood", font=FONTS["body"],
-                                    fg=COLORS["accent"], bg=COLORS["card"])
-        self.quest_label.pack(side="left", padx=(8, 0))
+        self.game_badge.pack(side="left", padx=(8, 0))
 
         # Mini log
         log_card = Card(self, "RECENT ACTIVITY")
@@ -117,8 +111,8 @@ class SettingsPage(tk.Frame):
              "Only change if you have multiple BlueStacks instances"),
         ])
 
-        # Quest
-        self._quest_section()
+        # Max runs
+        self._max_runs_section()
 
         # Timings
         self._section("Timings", [
@@ -193,37 +187,14 @@ class SettingsPage(tk.Frame):
             entry.pack(fill="x", pady=(4, 8))
             self._entries[key] = entry
 
-    def _quest_section(self):
-        card = Card(self._inner, "Quest Type")
+    def _max_runs_section(self):
+        card = Card(self._inner, "Runs")
         card.pack(fill="x", padx=24, pady=(0, 12))
         inner = tk.Frame(card, bg=COLORS["card"], padx=16, pady=12)
         inner.pack(fill="x")
-
-        tk.Label(inner, text="Select which Party Quest to farm",
-                 font=FONTS["small"], fg=COLORS["text_dim"], bg=COLORS["card"]).pack(anchor="w")
-
-        btn_frame = tk.Frame(inner, bg=COLORS["card"], pady=8)
-        btn_frame.pack(fill="x")
-
-        self._quest_var = tk.StringVar(value=self.config.get("quest.type", "sleepywood"))
-        for text, val in [("Sleepywood", "sleepywood"), ("Ludibrium", "ludibrium"),
-                          ("Orbis", "orbis"), ("Zakum", "zakum")]:
-            rb = tk.Radiobutton(btn_frame, text=text, variable=self._quest_var,
-                                value=val, font=FONTS["body"], fg=COLORS["text"],
-                                bg=COLORS["card"], selectcolor=COLORS["accent"],
-                                activebackground=COLORS["card"],
-                                activeforeground=COLORS["text_bright"],
-                                indicatoron=0, padx=16, pady=6, relief="flat",
-                                cursor="hand2", borderwidth=0,
-                                highlightbackground=COLORS["border"],
-                                highlightthickness=1)
-            rb.pack(side="left", padx=(0, 6))
-
-        row = tk.Frame(inner, bg=COLORS["card"], pady=4)
-        row.pack(fill="x")
-        tk.Label(row, text="Max runs (0 = unlimited)", font=FONTS["body"],
+        tk.Label(inner, text="Max runs (0 = unlimited)", font=FONTS["body"],
                  fg=COLORS["text"], bg=COLORS["card"]).pack(anchor="w")
-        self._max_runs = tk.Entry(row, font=FONTS["mono"], bg=COLORS["input_bg"],
+        self._max_runs = tk.Entry(inner, font=FONTS["mono"], bg=COLORS["input_bg"],
                                   fg=COLORS["text_bright"], insertbackground=COLORS["text"],
                                   relief="flat", highlightbackground=COLORS["border"],
                                   highlightthickness=1, width=10)
@@ -247,7 +218,6 @@ class SettingsPage(tk.Frame):
                     except ValueError:
                         self.config.set(key, val)
 
-        self.config.set("quest.type", self._quest_var.get())
         try:
             self.config.set("quest.max_runs", int(self._max_runs.get()))
         except ValueError:

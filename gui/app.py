@@ -231,24 +231,15 @@ class BotApp:
                 self._status_text.config(text="Could not connect — start BlueStacks first")
                 return
 
-        # Lazy-init heavy modules (cv2/numpy load here)
         self._init_core()
-        self.capture.find_window()
 
-        from games.pq_farmer import PQFarmer, QuestType
-        quest_str = self.config.get("quest.type", "sleepywood")
-        try:
-            quest = QuestType(quest_str)
-        except ValueError:
-            quest = QuestType.SLEEPYWOOD
-
+        from games.pq_farmer import PQFarmer
         self.bot = PQFarmer(
             adb=self.adb,
             capture=self.capture,
             matcher=self.matcher,
             inp=self.input_handler,
             config=self.config.data,
-            quest_type=quest,
         )
         self.bot.on_state_change = lambda bs, gs: self.root.after(0, self._on_state_change, bs, gs)
         self.bot.on_stats_update = lambda s: self.root.after(0, self._on_stats_update, s)

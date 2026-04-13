@@ -9,7 +9,7 @@ from typing import Optional, Tuple
 
 log = logging.getLogger("msm-pq-farmer")
 
-WINDOW_TITLE = "BlueStacks App Player"
+WINDOW_TITLES = ["BlueStacks App Player", "BlueStacks", "bluestacks"]
 CACHE_TTL = 0.1  # 100 ms
 
 
@@ -25,14 +25,14 @@ class ScreenCapture:
 
     # ── window discovery ───────────────────────────────────────────────
 
-    def find_window(self, title: str = WINDOW_TITLE) -> bool:
+    def find_window(self) -> bool:
         try:
             import win32gui
             results = []
 
             def cb(hwnd, _):
-                t = win32gui.GetWindowText(hwnd)
-                if title in t:
+                t = win32gui.GetWindowText(hwnd).lower()
+                if "bluestacks" in t:
                     r = win32gui.GetWindowRect(hwnd)
                     w, h = r[2] - r[0], r[3] - r[1]
                     if w > 200 and h > 200:
