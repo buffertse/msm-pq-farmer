@@ -211,81 +211,7 @@ class PQFarmer:
             self._idle_timer = time.time()
             self._idle_interval = random.uniform(*self._t("random_tap_interval", [30, 60]))
 
-    # ── wait phases (same as original) ─────────────────────────────────
-
-    def _wait_accept(self) -> bool:
-        """Wait for Accept popup during matchmaking."""
-        log.info("Waiting for Accept...")
-        timeout = self._t("matchmaking_timeout", 180)
-        poll = self._t("accept_poll_interval", 0.8)
-        t0 = time.time()
-
-        while not self._stop_event.is_set() and time.time() - t0 < timeout:
-            if self._pause_event.is_set():
-                time.sleep(1)
-                continue
-
-            s = self._detect_state()
-            self.game_state = s
-            self._emit_state()
-
-            if s == GameState.ACCEPT:
-                lo, hi = self._t("accept_reaction_delay", [0.5, 3.0])
-                d = random.uniform(lo, hi)
-                time.sleep(d)
-                log.info("Accept found (reaction %.1fs)", d)
-                self._tap_accept()
-                time.sleep(1.5)
-                # Verify we accepted
-                if self._detect_state() != GameState.ACCEPT:
-                    return True
-                time.sleep(random.uniform(0.3, 1))
-                self._tap_accept()
-                return True
-
-            if s == GameState.MENU:
-                log.info("Back at menu (match failed)")
-                return False
-
-            elapsed = int(time.time() - t0)
-            if elapsed > 0 and elapsed % 30 == 0:
-                log.info("  Queue: %ds / %ds", elapsed, timeout)
-
-            time.sleep(poll + random.uniform(0, 0.5))
-
-        log.warning("Queue timeout (%ds)", timeout)
-        self.stats.queue_timeouts += 1
-        self._emit_stats()
-        return False
-
-    def _wait_pq(self):
-        """Wait inside PQ with idle taps."""
-        dur = self._t("pq_duration", 350)
-        log.info("In PQ (timeout %ds)", dur)
-        self.game_state = GameState.WAITING
-        self._emit_state()
-        t0 = time.time()
-
-        while not self._stop_event.is_set() and time.time() - t0 < dur:
-            if self._pause_event.is_set():
-                time.sleep(1)
-                continue
-
-            self._maybe_idle_tap()
-
-            s = self._detect_state()
-            if s == GameState.MENU:
-                log.info("PQ done (%ds)", int(time.time() - t0))
-                return
-            if s == GameState.ACCEPT:
-                time.sleep(random.uniform(0.5, 2))
-                self._tap_accept()
-
-            time.sleep(random.uniform(4, 7))
-
-        log.info("PQ timeout — continuing")
-
-    # ── main loop (mirrors original farmer.py exactly) ─────────────────
+    # ── main loop (tick-based: scan every ~1s, act immediately) ──────────
 
     def start(self):
         self.state = BotState.RUNNING
@@ -324,7 +250,6 @@ class PQFarmer:
     def _run(self):
         log.info("MSM PQ Farmer started")
 
-        # Find window for background capture
         if self.capture.find_window():
             log.info("BlueStacks window found")
         else:
@@ -337,11 +262,15 @@ class PQFarmer:
                 return
 
         max_runs = self.cfg.get("quest", {}).get("max_runs", 0)
-        runs = 0
+        prev_state = None
+        in_pq = False
+        pq_start = 0
+        queue_start = 0
+        queued = False
 
         try:
             while not self._stop_event.is_set():
-                if max_runs > 0 and runs >= max_runs:
+                if max_runs > 0 and self.stats.pq_runs >= max_runs:
                     log.info("Completed %d runs — stopping", max_runs)
                     break
 
@@ -349,63 +278,92 @@ class PQFarmer:
                     time.sleep(1)
                     continue
 
-                runs += 1
                 state = self._detect_state()
                 self.game_state = state
                 self._emit_state()
-                log.info("--- run %d --- [%s]", runs, state.value)
 
+                # Log state transitions
+                if state != prev_state:
+                    log.info("State: %s", state.value)
+                    prev_state = state
+
+                # ── MENU: Auto Match button visible → tap it to queue ──
                 if state == GameState.MENU:
-                    lo, hi = self._t("pre_queue_delay", [0, 20])
-                    w = random.uniform(lo, hi)
-                    log.info("Queue in %.0fs", w)
-                    time.sleep(w)
-                    self._tap_auto_match()
-                    time.sleep(random.uniform(2, 4))
-                    if self._wait_accept():
-                        self._wait_pq()
-                        lo, hi = self._t("post_reward_delay", [6, 12])
-                        time.sleep(random.uniform(lo, hi))
+                    if in_pq:
+                        # PQ just ended, we're back at menu
+                        elapsed = int(time.time() - pq_start)
+                        log.info("PQ done (%ds)", elapsed)
                         self.stats.pq_runs += 1
                         self._emit_stats()
-                    else:
-                        time.sleep(random.uniform(2, 5))
-
-                elif state == GameState.ACCEPT:
-                    lo, hi = self._t("accept_reaction_delay", [0.5, 3.0])
-                    time.sleep(random.uniform(lo, hi))
-                    self._tap_accept()
-                    time.sleep(2)
-                    self._wait_pq()
-                    lo, hi = self._t("post_reward_delay", [6, 12])
-                    time.sleep(random.uniform(lo, hi))
-                    self.stats.pq_runs += 1
-                    self._emit_stats()
-
-                elif state == GameState.WAITING:
-                    log.info("In queue or PQ — waiting for accept or tapping Auto Match")
-                    # Try tapping Auto Match first in case we're at menu
-                    # with an overlay (rewards popup etc)
-                    self._tap_auto_match()
-                    time.sleep(random.uniform(2, 4))
-                    if self._wait_accept():
-                        self._wait_pq()
+                        in_pq = False
+                        queued = False
+                        # Post-reward delay
                         lo, hi = self._t("post_reward_delay", [6, 12])
                         time.sleep(random.uniform(lo, hi))
-                        self.stats.pq_runs += 1
-                        self._emit_stats()
-                    else:
-                        # Timeout — tap Auto Match again
+                        continue
+
+                    if not queued:
+                        # Pre-queue delay (human-like)
                         lo, hi = self._t("pre_queue_delay", [0, 20])
-                        time.sleep(random.uniform(lo, hi))
+                        w = random.uniform(lo, hi)
+                        if w > 1:
+                            log.info("Queue in %.0fs", w)
+                        time.sleep(w)
+                        self._tap_auto_match()
+                        queued = True
+                        queue_start = time.time()
+                        time.sleep(random.uniform(1, 3))
+                    else:
+                        # We tapped Auto Match but still see it →
+                        # maybe it didn't register, tap again
+                        log.info("Auto Match still visible — retapping")
                         self._tap_auto_match()
                         time.sleep(random.uniform(2, 4))
 
-                else:  # UNKNOWN — can't capture screen
-                    log.warning("Cannot detect state — retrying in 5s")
-                    # Still try tapping Auto Match blindly
-                    self._tap_auto_match()
-                    time.sleep(5)
+                # ── ACCEPT: match found → tap Accept ───────────────────
+                elif state == GameState.ACCEPT:
+                    lo, hi = self._t("accept_reaction_delay", [0.5, 3.0])
+                    d = random.uniform(lo, hi)
+                    time.sleep(d)
+                    log.info("Accept found (reaction %.1fs)", d)
+                    self._tap_accept()
+                    in_pq = True
+                    pq_start = time.time()
+                    queued = False
+                    time.sleep(random.uniform(1, 2))
+
+                # ── WAITING: in queue, in PQ, or unknown screen ────────
+                elif state == GameState.WAITING:
+                    if in_pq:
+                        # Inside PQ — idle taps to look active
+                        self._maybe_idle_tap()
+                        # Check for PQ timeout
+                        dur = self._t("pq_duration", 350)
+                        if time.time() - pq_start > dur:
+                            log.info("PQ timeout (%ds)", dur)
+                            in_pq = False
+                    elif queued:
+                        # In matchmaking queue — check for timeout
+                        timeout = self._t("matchmaking_timeout", 180)
+                        elapsed = int(time.time() - queue_start)
+                        if elapsed > 0 and elapsed % 30 == 0:
+                            log.info("  Queue: %ds / %ds", elapsed, timeout)
+                        if elapsed > timeout:
+                            log.warning("Queue timeout (%ds) — retapping Auto Match", timeout)
+                            self.stats.queue_timeouts += 1
+                            self._emit_stats()
+                            queued = False  # will re-tap next tick
+                    else:
+                        # Neither in PQ nor queued — could be end credits,
+                        # loading screen, popup etc. Just wait and rescan.
+                        pass
+
+                # ── UNKNOWN: capture failed ─────────────────────────────
+                else:
+                    pass
+
+                # Poll interval (~1s between scans)
+                time.sleep(random.uniform(0.8, 1.5))
 
         except KeyboardInterrupt:
             pass
