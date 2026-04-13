@@ -233,6 +233,7 @@ class BotApp:
 
         self._init_core()
 
+        import sys
         from games.pq_farmer import PQFarmer
         self.bot = PQFarmer(
             adb=self.adb,
@@ -241,6 +242,7 @@ class BotApp:
             inp=self.input_handler,
             config=self.config.data,
         )
+        self.bot.debug = "--debug" in sys.argv
         self.bot.on_state_change = lambda bs, gs: self.root.after(0, self._on_state_change, bs, gs)
         self.bot.on_stats_update = lambda s: self.root.after(0, self._on_stats_update, s)
 

@@ -80,6 +80,7 @@ class PQFarmer:
         self._pause_event = threading.Event()
 
         self._debug_logged = False
+        self.debug = False
 
         # Idle tap timer
         interval = self._t("random_tap_interval", [30, 60])
@@ -134,26 +135,26 @@ class PQFarmer:
 
         w, h = img.size
 
-        # On first scan, save debug screenshot and log colours
+        # Debug: log capture info and save screenshot on first scan
         if not self._debug_logged:
             self._debug_logged = True
             log.info("Capture size: %dx%d", w, h)
-            try:
-                img.save("debug_capture.png")
-                log.info("Saved debug_capture.png — check what the bot sees")
-            except Exception:
-                pass
-            # Sample key positions
-            for label, rx, ry in [
-                ("auto_match_default", 0.88, 0.86),
-                ("bottom-right1", 0.85, 0.90),
-                ("bottom-right2", 0.90, 0.93),
-                ("bottom-right3", 0.85, 0.95),
-                ("center", 0.50, 0.70),
-            ]:
-                px = img.getpixel((int(rx * w), int(ry * h)))[:3]
-                log.info("  Pixel (%.2f, %.2f) = RGB(%d, %d, %d)  [%s]",
-                         rx, ry, px[0], px[1], px[2], label)
+            if self.debug:
+                try:
+                    img.save("debug_capture.png")
+                    log.info("Saved debug_capture.png")
+                except Exception:
+                    pass
+                for label, rx, ry in [
+                    ("auto_match_default", 0.88, 0.86),
+                    ("bottom-right1", 0.85, 0.90),
+                    ("bottom-right2", 0.90, 0.93),
+                    ("bottom-right3", 0.85, 0.95),
+                    ("center", 0.50, 0.70),
+                ]:
+                    px = img.getpixel((int(rx * w), int(ry * h)))[:3]
+                    log.info("  Pixel (%.2f, %.2f) = RGB(%d, %d, %d)  [%s]",
+                             rx, ry, px[0], px[1], px[2], label)
 
         ac_match = self._scan_accept(img, w, h)
         am_match = self._scan_auto_match(img, w, h)
@@ -285,6 +286,7 @@ class PQFarmer:
         pq_start = 0
         queue_start = 0
         queued = False
+        menu_count = 0
 
         try:
             while not self._stop_event.is_set():
@@ -308,14 +310,19 @@ class PQFarmer:
                 # ── MENU: Auto Match button visible → tap it to queue ──
                 if state == GameState.MENU:
                     if in_pq:
-                        # PQ just ended, we're back at menu
-                        elapsed = int(time.time() - pq_start)
-                        log.info("PQ done (%ds)", elapsed)
+                        # Confirm with consecutive detections to avoid
+                        # false positives from loading screen flicker
+                        menu_count += 1
+                        if menu_count < 3:
+                            time.sleep(random.uniform(0.8, 1.5))
+                            continue
+                        # Confirmed — PQ is actually done
+                        log.info("PQ done (%ds)", int(time.time() - pq_start))
                         self.stats.pq_runs += 1
                         self._emit_stats()
                         in_pq = False
                         queued = False
-                        # Post-reward delay
+                        menu_count = 0
                         lo, hi = self._t("post_reward_delay", [6, 12])
                         time.sleep(random.uniform(lo, hi))
                         continue
@@ -340,6 +347,7 @@ class PQFarmer:
 
                 # ── ACCEPT: match found → tap Accept ───────────────────
                 elif state == GameState.ACCEPT:
+                    menu_count = 0
                     lo, hi = self._t("accept_reaction_delay", [0.5, 3.0])
                     d = random.uniform(lo, hi)
                     time.sleep(d)
@@ -348,10 +356,12 @@ class PQFarmer:
                     in_pq = True
                     pq_start = time.time()
                     queued = False
-                    time.sleep(random.uniform(1, 2))
+                    # Wait for loading screen to pass before scanning again
+                    time.sleep(random.uniform(8, 12))
 
                 # ── WAITING: in queue, in PQ, or unknown screen ────────
                 elif state == GameState.WAITING:
+                    menu_count = 0
                     if in_pq:
                         # Inside PQ — idle taps to look active
                         self._maybe_idle_tap()
