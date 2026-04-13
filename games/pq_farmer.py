@@ -134,19 +134,26 @@ class PQFarmer:
 
         w, h = img.size
 
-        # On first scan, log image size and a sample of colours to help debug
+        # On first scan, save debug screenshot and log colours
         if not self._debug_logged:
             self._debug_logged = True
             log.info("Capture size: %dx%d", w, h)
-            # Sample a few key positions to see what colors we get
+            try:
+                img.save("debug_capture.png")
+                log.info("Saved debug_capture.png — check what the bot sees")
+            except Exception:
+                pass
+            # Sample key positions
             for label, rx, ry in [
-                ("bottom-right", 0.88, 0.93),
-                ("bottom-right2", 0.85, 0.96),
+                ("auto_match_default", 0.88, 0.86),
+                ("bottom-right1", 0.85, 0.90),
+                ("bottom-right2", 0.90, 0.93),
+                ("bottom-right3", 0.85, 0.95),
                 ("center", 0.50, 0.70),
             ]:
                 px = img.getpixel((int(rx * w), int(ry * h)))[:3]
-                log.debug("  Pixel at (%.2f, %.2f) = RGB(%d, %d, %d)  [%s]",
-                          rx, ry, px[0], px[1], px[2], label)
+                log.info("  Pixel (%.2f, %.2f) = RGB(%d, %d, %d)  [%s]",
+                         rx, ry, px[0], px[1], px[2], label)
 
         ac_match = self._scan_accept(img, w, h)
         am_match = self._scan_auto_match(img, w, h)
@@ -159,37 +166,29 @@ class PQFarmer:
 
     def _scan_auto_match(self, img, w, h) -> bool:
         """Scan bottom-right quadrant for the Auto Match button (yellow-green)."""
-        # The Auto Match button is large and yellow-green, sitting at the
-        # bottom-right of the game area. BlueStacks chrome (title bar,
-        # toolbar, sidebar) shifts the game content, so scan a wide area.
-        # rx=0.60-0.98, ry=0.75-0.99
         for rx_pct in range(60, 99, 3):
             for ry_pct in range(75, 100, 2):
-                rx = rx_pct / 100.0
-                ry = ry_pct / 100.0
                 px = img.getpixel((
-                    max(0, min(int(rx * w), w - 1)),
-                    max(0, min(int(ry * h), h - 1)),
+                    max(0, min(int(rx_pct * w // 100), w - 1)),
+                    max(0, min(int(ry_pct * h // 100), h - 1)),
                 ))[:3]
-                # Yellow-green signature: R>140, G>180, B<80
-                if px[0] > 140 and px[1] > 180 and px[2] < 80:
+                # Yellow-green: G is dominant, R is moderate, B is low
+                # Relaxed: R>120, G>160, B<120, and G must be highest
+                if px[1] > 160 and px[0] > 120 and px[2] < 120 and px[1] > px[0] and px[1] > px[2]:
                     return True
         return False
 
     def _scan_accept(self, img, w, h) -> bool:
         """Scan center region for the Accept button (cyan)."""
-        # The Accept popup appears in the center. Scan a wide area.
-        # rx=0.30-0.70, ry=0.40-0.90
         for rx_pct in range(30, 71, 4):
             for ry_pct in range(40, 91, 3):
-                rx = rx_pct / 100.0
-                ry = ry_pct / 100.0
                 px = img.getpixel((
-                    max(0, min(int(rx * w), w - 1)),
-                    max(0, min(int(ry * h), h - 1)),
+                    max(0, min(int(rx_pct * w // 100), w - 1)),
+                    max(0, min(int(ry_pct * h // 100), h - 1)),
                 ))[:3]
-                # Cyan signature: R<80, G>160, B>160
-                if px[0] < 80 and px[1] > 160 and px[2] > 160:
+                # Cyan: R is low, G and B are high
+                # Relaxed: R<100, G>140, B>140
+                if px[0] < 100 and px[1] > 140 and px[2] > 140:
                     return True
         return False
 
