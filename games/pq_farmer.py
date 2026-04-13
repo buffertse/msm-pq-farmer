@@ -273,6 +273,7 @@ class PQFarmer:
         t0 = time.time()
         timeout = self.cfg["matchmaking_timeout"]
         poll = self.cfg["accept_poll_interval"]
+        last_recovery = time.time()
 
         while not self._stop.is_set() and time.time() - t0 < timeout:
             if self._pause.is_set():
@@ -306,6 +307,14 @@ class PQFarmer:
                 log.info("Back at menu (match failed)")
                 return False
 
+            # Recovery: if stuck in "waiting" for 60s, tap center to
+            # dismiss popups (Lost connection, event notices, etc.)
+            if time.time() - last_recovery > 60:
+                log.info("Stuck — tapping OK to dismiss popup")
+                self._tap(960, 560, "[OK dismiss]")
+                time.sleep(2)
+                last_recovery = time.time()
+
             e = int(time.time() - t0)
             if e > 0 and e % 30 == 0:
                 log.info("  Queue: %ds / %ds", e, timeout)
@@ -313,6 +322,9 @@ class PQFarmer:
 
         log.warning("Queue timeout (%ds)", timeout)
         self.stats.queue_timeouts += 1
+        # Tap center to dismiss any popup before retrying
+        self._tap(960, 560, "[OK dismiss]")
+        time.sleep(2)
         return False
 
     def _wait_pq(self):
@@ -339,6 +351,9 @@ class PQFarmer:
             time.sleep(random.uniform(4, 7))
 
         log.info("PQ timeout — continuing")
+        # Dismiss any popup
+        self._tap(960, 560, "[OK dismiss]")
+        time.sleep(2)
 
     # ── main loop (exact same flow as original) ────────────────────────
 
