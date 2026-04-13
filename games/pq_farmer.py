@@ -79,6 +79,8 @@ class PQFarmer:
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
 
+        self._debug_logged = False
+
         # Idle tap timer
         interval = self._t("random_tap_interval", [30, 60])
         self._idle_timer = time.time()
@@ -131,6 +133,21 @@ class PQFarmer:
             return GameState.UNKNOWN
 
         w, h = img.size
+
+        # On first scan, log image size and a sample of colours to help debug
+        if not self._debug_logged:
+            self._debug_logged = True
+            log.info("Capture size: %dx%d", w, h)
+            # Sample a few key positions to see what colors we get
+            for label, rx, ry in [
+                ("bottom-right", 0.88, 0.93),
+                ("bottom-right2", 0.85, 0.96),
+                ("center", 0.50, 0.70),
+            ]:
+                px = img.getpixel((int(rx * w), int(ry * h)))[:3]
+                log.debug("  Pixel at (%.2f, %.2f) = RGB(%d, %d, %d)  [%s]",
+                          rx, ry, px[0], px[1], px[2], label)
+
         ac_match = self._scan_accept(img, w, h)
         am_match = self._scan_auto_match(img, w, h)
 
@@ -141,11 +158,13 @@ class PQFarmer:
         return GameState.WAITING
 
     def _scan_auto_match(self, img, w, h) -> bool:
-        """Scan bottom-right region for the Auto Match button (yellow-green)."""
-        # Auto Match is a large yellow-green button in the bottom-right.
-        # Scan rx=0.75-0.96, ry=0.80-0.94
-        for rx_pct in range(75, 97, 3):
-            for ry_pct in range(80, 95, 2):
+        """Scan bottom-right quadrant for the Auto Match button (yellow-green)."""
+        # The Auto Match button is large and yellow-green, sitting at the
+        # bottom-right of the game area. BlueStacks chrome (title bar,
+        # toolbar, sidebar) shifts the game content, so scan a wide area.
+        # rx=0.60-0.98, ry=0.75-0.99
+        for rx_pct in range(60, 99, 3):
+            for ry_pct in range(75, 100, 2):
                 rx = rx_pct / 100.0
                 ry = ry_pct / 100.0
                 px = img.getpixel((
@@ -159,10 +178,10 @@ class PQFarmer:
 
     def _scan_accept(self, img, w, h) -> bool:
         """Scan center region for the Accept button (cyan)."""
-        # Accept popup appears in the center of the screen.
-        # Scan rx=0.38-0.62, ry=0.50-0.85
-        for rx_pct in range(38, 63, 4):
-            for ry_pct in range(50, 86, 3):
+        # The Accept popup appears in the center. Scan a wide area.
+        # rx=0.30-0.70, ry=0.40-0.90
+        for rx_pct in range(30, 71, 4):
+            for ry_pct in range(40, 91, 3):
                 rx = rx_pct / 100.0
                 ry = ry_pct / 100.0
                 px = img.getpixel((
