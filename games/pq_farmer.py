@@ -260,6 +260,17 @@ class PQFarmer:
 
     # ── recovery ───────────────────────────────────────────────────────
 
+    def _has_popup(self) -> bool:
+        """Check if an OK-button popup is visible (cyan at 960,700)."""
+        img = self._cap()
+        if img is None:
+            return False
+        w, h = img.size
+        # Check where OK button sits in popups
+        px = self._sample(img, 960 / 1920, 700 / 1080)
+        # Cyan OK button: R<80, G>160, B>160
+        return px[0] < 80 and px[1] > 160 and px[2] > 160
+
     def _dismiss_popup(self):
         """Dismiss popups and cancel broken queues."""
         log.info("Dismissing popup...")
@@ -311,9 +322,10 @@ class PQFarmer:
                 log.info("Back at menu (match failed)")
                 return False
 
-            # Recovery: if stuck in "waiting" for 30s, dismiss popups
+            # Recovery: if stuck in "waiting" for 30s, check for popup
             if time.time() - last_recovery > 30:
-                self._dismiss_popup()
+                if self._has_popup():
+                    self._dismiss_popup()
                 last_recovery = time.time()
 
             e = int(time.time() - t0)
